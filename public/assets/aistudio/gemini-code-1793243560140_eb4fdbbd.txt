@@ -1,0 +1,68 @@
+Bạn là Kỹ sư Phần mềm số 4 trong một nhóm gồm 4 kỹ sư AI đang cùng xây dựng ứng dụng Web App "Shopee 11.11 Tactical HUD" (chạy trên trình duyệt điện thoại, triển khai qua Google AI Studio).
+
+I. BỐI CẢNH DỰ ÁN & LÝ DO PHẢI LÀM MODULE NÀY:
+- Không ai có thể đặt thông số độ trễ (Delay) hoàn hảo ngay từ lần đầu tiên vì tốc độ mạng 5G và độ trễ máy chủ Shopee thay đổi theo từng khung giờ (0h, 9h, 12h, 15h, 18h, 21h).
+- Từ nay đến ngày 11/11/2026 còn nhiều khung giờ sale mỗi ngày. Module 4 của bạn có 2 nhiệm vụ cốt lõi:
+  1. "Radar Săn Mã Back (Hồi mã)": Khi trượt mã ở giây 00:00 do hết lượt (lỗi M02), các đơn hàng bị hệ thống hủy hoặc lỗi thanh toán sẽ nhả mã lại vào các mốc cố định (`+1p30s`, `+3p00s`, `+5p00s`, `+10p00s`, `+15p00s`). Module của bạn sẽ đếm ngược các nhịp hồi mã này.
+  2. "Nhật Ký 1-Chạm & Thuật Toán Tự Hiệu Chỉnh (Auto-Tuning Engine)": Ngay sau mỗi lượt săn, người dùng chỉ cần bấm 1 nút mô tả hiện tượng vừa gặp trên màn hình, thuật toán của bạn sẽ tự động chẩn đoán nguyên nhân và tinh chỉnh lại bộ thông số mili-giây (`delays` và `triggerOffsetMs`) cho khung giờ tiếp theo, rồi phát sự kiện cập nhật ngược lại cho Module 1 và Module 2.
+
+II. PHÂN CÔNG TRONG NHÓM 4 KỸ SƯ:
+- Kỹ sư #1 (Module 1): Đồng hồ mili-giây & Máy tính độ trễ 6 Pha (`#module-1-root`). Lắng nghe sự kiện `hud:delays-calibrated` từ Module 4 của bạn.
+- Kỹ sư #2 (Module 2): Bản đồ tọa độ & Cửa sổ nổi PiP (`#module-2-root`).
+- Kỹ sư #3 (Module 3): Kiểm tra điều kiện đơn hàng 5 triệu, Checklist trước giờ G & Link FB (`#module-3-root`).
+- Bạn (Kỹ sư #4 - Module 4): Viết "Back-Voucher Radar, Telemetry Logger & Self-Tuning Engine". Gắn vào thẻ <div id="module-4-root"></div>.
+
+III. HỢP ĐỒNG GIAO DIỆN CHUNG (BẮT BUỘC TUÂN THỦ 100% ĐỂ GHÉP CODE):
+Sử dụng đối tượng toàn cục `window.ShopeeHUD` dưới đây:
+
+window.ShopeeHUD = window.ShopeeHUD || {
+  state: {
+    clockOffsetMs: 0,
+    networkRttMs: 45,
+    walletCount: 1402,
+    targetTimeIso: "2026-11-11T12:00:00.000+07:00",
+    huntMode: "SAVED_WALLET",
+    voucherType: "DIRECT_DISCOUNT",
+    serverLoad: "MEGA_SALE",
+    delays: {
+      phase1_prewarmMs: 120000,
+      phase2_antifreezeMs: 222,
+      phase3_openModalMs: 1000,
+      phase4_selectTopMs: 55,
+      phase5_confirmApplyMs: 850,
+      phase6_checkoutSpamMs: 60
+    },
+    triggerOffsetMs: -350,
+    currentPhase: 0,
+    orderCheck: {},
+    checklistReady: false,
+    logs: []
+  },
+  bus: {
+    emit(eventName, detail) {
+      window.dispatchEvent(new CustomEvent("hud:" + eventName, { detail }));
+    },
+    on(eventName, handler) {
+      window.addEventListener("hud:" + eventName, (e) => handler(e.detail));
+    }
+  },
+  modules: {}
+};
+
+IV. YÊU CẦU CODE CHI TIẾT CHO MODULE 4 CỦA BẠN:
+Hãy viết trọn bộ code HTML (render vào `#module-4-root`, dùng TailwindCSS Dark Mode) và JavaScript đăng ký vào `window.ShopeeHUD.modules.module4` thực hiện:
+1. Radar Đếm Ngược "Mã Back" (Bổ sung/Hồi mã sau khung giờ):
+   - Lắng nghe `bus.on("tick")`. Ngay khi thời gian thực vượt qua mốc `T0` (00s000ms), tự động kích hoạt bảng đếm ngược tới 5 mốc hồi mã tiếp theo: `+01:30`, `+03:00`, `+05:00`, `+10:00`, `+15:00` kèm nút "Đặt làm mục tiêu T0 mới" chỉ với 1 chạm.
+2. Ghi Nhận Kết Quả 1-Chạm & Thuật Toán Tự Hiệu Chỉnh Độ Trễ (Self-Tuning):
+   Khi người dùng bấm 1 trong 5 nút kết quả sau mỗi pha săn, lưu bản ghi vào `state.logs` (đồng bộ LocalStorage) và tự động tính lại `state.delays` + `state.triggerOffsetMs`:
+   - Nút 1: `[THÀNH CÔNG - Áp mã & Đặt đơn chuẩn]` -> Giữ nguyên bộ thông số vàng hiện tại và đánh dấu "Golden Profile".
+   - Nút 2: `[MỞ KHO MÃ CHƯA SÁNG / CHƯA ĐẨY LÊN ĐẦU]` -> Chẩn đoán: Bấm mở kho quá sớm. Tự động điều chỉnh `state.triggerOffsetMs += 70` (lùi thời điểm bấm mở kho trễ hơn 70ms).
+   - Nút 3: `[NGUY HIỂM: BẤM QUA NÚT ĐỒNG Ý KHI CHƯA KỊP TẢI / ĐƠN NGUYÊN GIÁ]` -> Chẩn đoán: Server lag hơn dự kiến. Tự động tăng `state.delays.phase3_openModalMs += 150` và `state.delays.phase5_confirmApplyMs += 180`.
+   - Nút 4: `[MÃ ĐÃ SÁNG NHƯNG BÁO LỖI M02 HẾT LƯỢT LÚC ĐẶT HÀNG]` -> Chẩn đoán: Thao tác chuẩn nhưng tổng thời gian chờ hơi chậm. Tự động giảm `state.delays.phase3_openModalMs -= 50` và `state.delays.phase5_confirmApplyMs -= 50` (nhưng giữ giới hạn an toàn `phase3 >= 600ms`, `phase5 >= 550ms` cho mã giảm trực tiếp và mọi pha `>= 50ms`).
+   - Nút 5: `[ĂN ĐƯỢC NHỜ MÃ BACK (+1p30s / +5p / +10p)]` -> Ghi nhận khung giờ có tỷ lệ hồi mã cao.
+   Sau khi hiệu chỉnh, phát sự kiện `bus.emit("delays-calibrated", { delays: state.delays, triggerOffsetMs: state.triggerOffsetMs })` để Module 1 và Module 2 tự động cập nhật ngay lập tức.
+3. Bản Đồ Nhiệt (Heatmap) 6 Khung Giờ & Sao Lưu JSON:
+   - Thống kê tỷ lệ thành công / lỗi M02 theo 6 khung giờ (`0h, 9h, 12h, 15h, 18h, 21h`).
+   - Có nút "Xuất cấu hình & Nhật ký (Export JSON)" và "Nhập cấu hình (Import JSON)" để người dùng lưu trữ trên điện thoại.
+
+Chỉ xuất ra code hoàn chỉnh, sạch, hoạt động độc lập và khớp 100% với `window.ShopeeHUD`.

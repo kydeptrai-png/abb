@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="vi" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Shopee 11.11 Tactical HUD</title>
+  <!-- Tailwind CSS Play CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            shopee: {
+              DEFAULT: '#ee4d2d',
+              dark: '#c43315'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Safe Insets for Android Edge to Edge */
+    body {
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 12px);
+      background-color: #0b0f19;
+      color: #f1f5f9;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col select-none">
+  <!-- Top Global Tactical HUD Bar -->
+  <header class="sticky top-0 z-50 bg-slate-950/95 backdrop-blur border-b border-slate-800 px-3 py-2.5 shadow-lg">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
+      <!-- Title & Live Status -->
+      <div class="flex items-center space-x-2">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-shopee to-amber-500 flex items-center justify-center font-black text-white text-base shadow-lg shadow-shopee/30">
+          ⚡
+        </div>
+        <div>
+          <h1 class="text-sm font-black tracking-tight text-white flex items-center gap-1.5">
+            SHOPEE 11.11 TACTICAL HUD
+            <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-orange-950/80 text-orange-400 border border-orange-500/30">PRO</span>
+          </h1>
+          <div class="text-[10px] text-slate-400 flex items-center gap-2">
+            <span class="flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+              Live Synced
+            </span>
+            <span>•</span>
+            <span id="top-bar-target-time" class="font-mono text-cyan-300">12:00:00 11/11/2026</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Action Controls -->
+      <div class="flex items-center gap-1.5">
+        <button id="global-btn-pip" class="px-2.5 py-1 bg-gradient-to-r from-cyan-600 to-blue-600 active:scale-95 text-white text-xs font-bold rounded-lg shadow transition flex items-center gap-1">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+          <span class="hidden sm:inline">Cửa Sổ Nổi</span> PiP
+        </button>
+        <button id="global-btn-sim" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-bold rounded-lg shadow transition flex items-center gap-1">
+          <span>⚡</span>
+          Test 15s
+        </button>
+      </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="max-w-7xl mx-auto mt-2 flex items-center space-x-1 overflow-x-auto no-scrollbar pb-0.5 text-xs">
+      <button class="nav-tab px-3 py-1.5 rounded-lg font-bold bg-slate-800 text-cyan-400 border border-slate-700 shrink-0" data-view="all">
+        Tất Cả Module (Full HUD)
+      </button>
+      <button class="nav-tab px-3 py-1.5 rounded-lg font-medium text-slate-400 hover:text-slate-200 shrink-0" data-view="m1">
+        M1: Đồng Hồ &amp; 6 Pha
+      </button>
+      <button class="nav-tab px-3 py-1.5 rounded-lg font-medium text-slate-400 hover:text-slate-200 shrink-0" data-view="m2">
+        M2: Tọa Độ &amp; PiP
+      </button>
+      <button class="nav-tab px-3 py-1.5 rounded-lg font-medium text-slate-400 hover:text-slate-200 shrink-0" data-view="m3">
+        M3: Cầu Dao &amp; Smart Screen
+      </button>
+      <button class="nav-tab px-3 py-1.5 rounded-lg font-medium text-slate-400 hover:text-slate-200 shrink-0" data-view="m4">
+        M4: Bridge &amp; Radar Hồi Mã
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Modules Layout Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-4 space-y-6">
+    <!-- Module 1 Root: Time & Latency Engine -->
+    <section id="sec-module-1" class="module-section">
+      <div id="module-1-root"></div>
+    </section>
+
+    <!-- Module 2 Root: Visual Coordinate Trainer & PiP Floating HUD -->
+    <section id="sec-module-2" class="module-section">
+      <div id="module-2-root"></div>
+    </section>
+
+    <!-- Module 3 Root: Pre-Flight Diagnostic & 3-Layer Order Optimizer -->
+    <section id="sec-module-3" class="module-section">
+      <div id="module-3-root"></div>
+    </section>
+
+    <!-- Module 4 Root: Back-Voucher Radar & Self-Tuning Engine -->
+    <section id="sec-module-4" class="module-section">
+      <div id="module-4-root"></div>
+    </section>
+  </main>
+
+  <!-- Bottom Floating Summary Bar -->
+  <footer class="bg-slate-950/95 border-t border-slate-800 px-3 sm:px-4 py-2 text-[11px] text-slate-400 flex flex-wrap items-center justify-between gap-2 shadow-2xl">
+    <div class="flex items-center gap-2 sm:gap-3 flex-wrap">
+      <!-- Live Real-Time Shopee Ping Monitor -->
+      <div id="footer-shopee-ping" onclick="window.ShopeeHUD.measureShopeePing()" class="shrink-0">
+        <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border bg-slate-900 border-slate-700 text-slate-300 cursor-pointer active:scale-95 transition">
+          <span class="relative flex h-2 w-2">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+          </span>
+          <span class="font-bold text-slate-300 text-[10px]">Ping Shopee:</span>
+          <span class="font-mono font-bold text-xs text-cyan-400">Đang đo...</span>
+        </div>
+      </div>
+      <span class="hidden md:inline text-slate-600">•</span>
+      <span class="hidden md:inline">Trợ lý Shopee 11.11 (Chỉ đọc)</span>
+      <span class="text-slate-600">•</span>
+      <span class="text-amber-400 font-mono font-semibold">SPayLater: 38,6M / 40M</span>
+    </div>
+    <div class="flex items-center gap-2 font-mono text-[11px]">
+      <span class="text-slate-500 hidden sm:inline">Chống F02:</span>
+      <span class="text-cyan-400 font-bold">&gt;= 50ms</span>
+    </div>
+  </footer>
+
+  <!-- Scripts in Required Order -->
+  <script src="core.js"></script>
+  <script src="module1.js"></script>
+  <script src="module2.js"></script>
+  <script src="module3.js"></script>
+  <script src="module4.js"></script>
+
+  <script>
+    // Master App Bootstrap
+    document.addEventListener("DOMContentLoaded", () => {
+      // 0. Start Continuous Real-Time Shopee Ping (every 2.5s)
+      if (window.ShopeeHUD.startContinuousShopeePing) {
+        window.ShopeeHUD.startContinuousShopeePing(2500);
+      }
+
+      // 1. Initialize Module 1 (Clock & Latency)
+      if (window.ShopeeHUD.modules.module1) {
+        window.ShopeeHUD.modules.module1.init();
+      }
+
+      // 2. Initialize Module 2 (Coordinates & PiP)
+      if (window.ShopeeHUD.modules.module2) {
+        window.ShopeeHUD.modules.module2.init();
+      }
+
+      // 3. Initialize Module 3 (Order Optimizer & Checklist)
+      if (window.ShopeeHUD.modules.module3) {
+        window.ShopeeHUD.modules.module3.init();
+      }
+
+      // 4. Initialize Module 4 (Radar & Self-Tuning)
+      if (window.ShopeeHUD.modules.module4) {
+        window.ShopeeHUD.modules.module4.init();
+      }
+
+      // View Tab Switcher logic
+      const tabs = document.querySelectorAll(".nav-tab");
+      const sections = {
+        m1: document.getElementById("sec-module-1"),
+        m2: document.getElementById("sec-module-2"),
+        m3: document.getElementById("sec-module-3"),
+        m4: document.getElementById("sec-module-4")
+      };
+
+      tabs.forEach(tab => {
+        tab.addEventListener("click", () => {
+          tabs.forEach(t => {
+            t.className = "nav-tab px-3 py-1.5 rounded-lg font-medium text-slate-400 hover:text-slate-200 shrink-0";
+          });
+          tab.className = "nav-tab px-3 py-1.5 rounded-lg font-bold bg-slate-800 text-cyan-400 border border-slate-700 shrink-0";
+
+          const view = tab.getAttribute("data-view");
+          if (view === "all") {
+            Object.values(sections).forEach(s => s && s.classList.remove("hidden"));
+          } else {
+            Object.entries(sections).forEach(([key, s]) => {
+              if (s) {
+                if (key === view) s.classList.remove("hidden");
+                else s.classList.add("hidden");
+              }
+            });
+          }
+        });
+      });
+
+      // Global PiP Button in header
+      const globPip = document.getElementById("global-btn-pip");
+      if (globPip) {
+        globPip.addEventListener("click", () => {
+          // Prefer native Android PiP if available, otherwise web video PiP
+          if (!window.ShopeeHUD.requestNativePip()) {
+            const webPipBtn = document.getElementById("m2-btn-web-pip");
+            if (webPipBtn) webPipBtn.click();
+          }
+        });
+      }
+
+      // Global Sim 15s in header
+      const globSim = document.getElementById("global-btn-sim");
+      if (globSim) {
+        globSim.addEventListener("click", () => {
+          const simBtn = document.getElementById("m1-btn-sim15");
+          if (simBtn) simBtn.click();
+        });
+      }
+    });
+  </script>
+</body>
+</html>

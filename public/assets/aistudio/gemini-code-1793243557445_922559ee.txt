@@ -1,0 +1,87 @@
+Bạn là Kỹ sư Phần mềm số 3 trong một nhóm gồm 4 kỹ sư AI đang cùng xây dựng ứng dụng Web App "Shopee 11.11 Tactical HUD" (chạy trên trình duyệt điện thoại, triển khai qua Google AI Studio).
+
+I. BỐI CẢNH DỰ ÁN & LÝ DO PHẢI LÀM MODULE NÀY:
+- Theo nghiên cứu thực chiến, 80% sự thành công khi săn mã nằm ở khâu chuẩn bị trước giờ G và tránh các "lỗi chí mạng" khiến hụt mã 100%.
+- Mục tiêu của người dùng là săn 2 mã "SPayLater Giảm 11trđ cho đơn tối thiểu 5trđ" (mở lúc 12:00 ngày 11/11/2026, đã lưu sẵn trong Kho Voucher ở trạng thái "Dùng sau").
+- Module 3 của bạn đóng vai trò "Bộ Kiểm Toán Đơn Hàng & Chẩn Đoán Lỗi Trước Giờ G":
+  1. Ngăn chặn lỗi kinh điển: Người dùng đã lưu mã vào kho ("Dùng sau") nhưng lại cố gõ mã vào ô nhập tay lúc 12:00 -> sẽ bị hệ thống chặn với lỗi "Bạn đã lưu voucher này".
+  2. Ngăn chặn bẫy tụt giá trị đơn tối thiểu: Điều kiện "Đơn tối thiểu 5.000.000đ" của mã Shopee được tính bằng `(Giá sản phẩm sau giảm) - (Voucher của Shop)`, KHÔNG cộng phí vận chuyển (16.500đ) hay bảo hiểm thời trang (3.999đ). Nếu áp Voucher của Shop làm đơn tụt xuống 4.990.000đ, mã 11 triệu sẽ bị mờ ngay lập tức.
+  3. Quản lý rủi ro SPayLater: Người dùng có hạn mức khả dụng 38.664.724đ / 40.000.000đ, nhưng đang có hóa đơn 1.228.876đ đến hạn ngày 10/11/2026 (trước ngày sale 11/11 đúng 1 ngày). Nếu quên đóng hóa đơn này, tài khoản sẽ bị khóa SPayLater đúng ngày săn.
+  4. Hỗ trợ luồng săn Mã Shopee Facebook (Giảm 25% - 50% tối đa 200k): Theo dõi thời gian tạo link chuyển đổi để tránh lỗi "ngâm link quá lâu bị lọc tài khoản".
+
+II. PHÂN CÔNG TRONG NHÓM 4 KỸ SƯ:
+- Kỹ sư #1 (Module 1): Đồng hồ mili-giây & Máy tính độ trễ 6 Pha (`#module-1-root`).
+- Kỹ sư #2 (Module 2): Bản đồ tọa độ & Cửa sổ nổi PiP (`#module-2-root`).
+- Bạn (Kỹ sư #3 - Module 3): Viết "Pre-Flight Diagnostic, 3-Layer Order Optimizer & Facebook Link Manager". Gắn vào thẻ <div id="module-3-root"></div>.
+- Kỹ sư #4 (Module 4): Nhật ký săn sale & Tự hiệu chỉnh thông số (`#module-4-root`).
+
+III. HỢP ĐỒNG GIAO DIỆN CHUNG (BẮT BUỘC TUÂN THỦ 100% ĐỂ GHÉP CODE):
+Sử dụng đối tượng toàn cục `window.ShopeeHUD` dưới đây:
+
+window.ShopeeHUD = window.ShopeeHUD || {
+  state: {
+    clockOffsetMs: 0,
+    networkRttMs: 45,
+    walletCount: 1402,
+    targetTimeIso: "2026-11-11T12:00:00.000+07:00",
+    huntMode: "SAVED_WALLET", // "SAVED_WALLET" | "MANUAL_INPUT" | "FB_LINK"
+    voucherType: "DIRECT_DISCOUNT",
+    serverLoad: "MEGA_SALE",
+    delays: {
+      phase1_prewarmMs: 120000,
+      phase2_antifreezeMs: 222,
+      phase3_openModalMs: 1000,
+      phase4_selectTopMs: 55,
+      phase5_confirmApplyMs: 850,
+      phase6_checkoutSpamMs: 60
+    },
+    triggerOffsetMs: -350,
+    currentPhase: 0,
+    orderCheck: {
+      cartSubtotal: 5500000,
+      shopVoucherDiscount: 0,
+      shippingFee: 16500,
+      freeshipDiscount: 16500,
+      targetMinSpend: 5000000,
+      targetMaxDiscount: 11000000,
+      spaylaterAvailable: 38664724,
+      spaylaterPendingBill: 1228876,
+      spaylaterBillDueDate: "2026-11-10",
+      isEligibleForTarget: true,
+      safeFromFullPriceRisk: true
+    },
+    checklistReady: false,
+    logs: []
+  },
+  bus: {
+    emit(eventName, detail) {
+      window.dispatchEvent(new CustomEvent("hud:" + eventName, { detail }));
+    },
+    on(eventName, handler) {
+      window.addEventListener("hud:" + eventName, (e) => handler(e.detail));
+    }
+  },
+  modules: {}
+};
+
+IV. YÊU CẦU CODE CHI TIẾT CHO MODULE 3 CỦA BẠN:
+Hãy viết trọn bộ code HTML (render vào `#module-3-root`, dùng TailwindCSS Dark Mode) và JavaScript đăng ký vào `window.ShopeeHUD.modules.module3` thực hiện 4 tính năng:
+1. Máy Tính Tối Ưu Đơn Hàng 3 Tầng & Bóc Tách Điều Kiện Mã (OCR Regex Parser):
+   - Có ô cho phép dán văn bản OCR từ ảnh chụp màn hình mã giảm giá (VD: "SPayLater Giảm 11trđ Đơn tối thiểu 5trđ Hiệu lực từ: 11.11.2026 12:00 Dùng sau") để tự động bóc tách `targetMinSpend`, `targetMaxDiscount`, `targetTimeIso` và trạng thái lưu kho.
+   - Nếu phát hiện chữ "Dùng sau" hoặc người dùng tích "Đã bấm Lưu trên banner", lập tức chuyển `state.huntMode = "SAVED_WALLET"`, phát `bus.emit("mode-changed", "SAVED_WALLET")` và hiện cảnh báo đỏ: "CẤM NHẬP TAY MÃ NÀY - PHẢI CHỌN TỪ DANH SÁCH KHO VOUCHER".
+   - Tính toán trực tiếp: `Giá trị xét duyệt mã Shopee = cartSubtotal - shopVoucherDiscount`. Nếu `< targetMinSpend`, báo động đỏ và khuyên "Gỡ bỏ Voucher của Shop" hoặc tính chính xác số tiền cần mua thêm (ví dụ gợi ý mua thêm món phụ 54.000đ).
+   - Tính số tiền thực trả cuối cùng qua SPayLater và so sánh kỳ hạn trả góp (1 tháng 0% phí vs 2-3 tháng).
+2. Cảnh Báo Hóa Đơn SPayLater & Phân Biệt Ô Nhập Mã:
+   - Hiển thị thẻ cảnh báo nổi bật: Số dư SPayLater `38.664.724đ / 40.000.000đ` và đếm ngược số ngày còn lại phải đóng hóa đơn `1.228.876đ` trước hạn `10/11/2026`.
+   - Hiển thị hướng dẫn trực quan phân biệt "Ô Voucher của Shop (nền trắng dưới sản phẩm)" và "Ô Shopee Voucher (nền cam dưới cùng)".
+3. Checklist 5 Bước Sống Còn Trước T-1 Phút (Lưu trạng thái vào LocalStorage):
+   - [ ] Đã đóng hóa đơn SPayLater 1.228.876đ trước ngày 10/11.
+   - [ ] Đã đứng sẵn ở màn hình Thanh toán, chọn sẵn vận chuyển (Nhanh/Hỏa Tốc) + mã Freeship + phương thức SPayLater (kỳ hạn x1 tháng).
+   - [ ] Đã BỎ CHỌN mã giảm giá cũ (như mã giảm 20% đang được chọn tự động) để đúng 12:00 mã 11tr tự động nhảy lên vị trí số 1.
+   - [ ] Đã bấm nút (X) tắt bong bóng nổi "Shopee VIP -20% MUA NGAY" ở góc dưới bên phải để không che nút tròn chọn mã.
+   - [ ] Không bấm thử nút "Áp dụng" liên tục trước giờ G để tránh bị khóa luồng áp mã.
+   Khi tick đủ 5 ô, cập nhật `state.checklistReady = true` và phát `bus.emit("order-validated", state.orderCheck)`.
+4. Trình Quản Lý Link Săn Mã Facebook (Giảm 25% - 50%):
+   - Cho phép lưu link sản phẩm gốc và link đã chuyển đổi qua trung gian (như Nô Tì), bấm giờ "Tuổi của link" (nếu tạo quá 15 phút chưa mua sẽ đổi màu vàng/đỏ cảnh báo nguy cơ bị lọc tài khoản, nhắc tạo lại link mới hoặc đổi tài khoản FB đăng bài chế độ "Chỉ mình tôi").
+
+Chỉ xuất ra code hoàn chỉnh, sạch, hoạt động độc lập và khớp 100% với `window.ShopeeHUD`.

@@ -1,0 +1,6 @@
+{
+  "name": "Shopee HUD",
+  "description": "Shopee 11.11 Tactical HUD - Trợ lý săn mã & tối ưu nhịp bấm mili-giây",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

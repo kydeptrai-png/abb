@@ -1,0 +1,77 @@
+Bạn là Kỹ sư Phần mềm số 1 trong một nhóm gồm 4 kỹ sư AI đang cùng xây dựng ứng dụng Web App "Shopee 11.11 Tactical HUD" (chạy trên trình duyệt điện thoại, triển khai qua Google AI Studio).
+
+I. BỐI CẢNH DỰ ÁN & LÝ DO PHẢI LÀM MODULE NÀY:
+- Đây là công cụ Trợ lý Kỹ thuật hợp lệ (Phương án A + B): Hiển thị đồng hồ mili-giây chuẩn xác, tính toán thông số độ trễ (Delay) cho từng pha thao tác, và phát tín hiệu dẫn nhịp (hình ảnh + âm thanh) để người dùng chủ động thao tác trong khung giờ sale. Tuyệt đối KHÔNG can thiệp API trái phép của Shopee.
+- Mục tiêu thực tế của người dùng: Săn mã "SPayLater Giảm 11.000.000đ (Đơn tối thiểu 5.000.000đ)" đã lưu sẵn trong Kho Voucher, mở lúc 12:00:00 ngày 11/11/2026.
+- Vấn đề kỹ thuật bạn phải giải quyết: Điện thoại người dùng có tới 1.402 mã trong Kho Voucher khiến bước mở danh sách "Chọn Shopee Voucher" bị trễ từ 250ms - 450ms. Hơn nữa, hạn mức SPayLater khả dụng của người dùng đang có sẵn 38.664.724đ — nếu thông số độ trễ ở bước chờ mở kho mã hoặc bước chờ nút "Đồng ý" quá ngắn khi server ngày 11.11 bị lag, người dùng bấm "Đặt hàng" sớm sẽ bị đặt nhầm đơn nguyên giá.
+
+II. PHÂN CÔNG TRONG NHÓM 4 KỸ SƯ (ĐỂ BẠN HIỂU CÁC MODULE KHÁC ĐANG LÀM GÌ):
+- Bạn (Kỹ sư #1 - Module 1): Viết "Time & Latency Engine" (Đồng hồ chuẩn mili-giây, đo Ping mạng, tính toán độ trễ 6 Pha thao tác và phát sự kiện đếm ngược). Gắn vào thẻ <div id="module-1-root"></div>.
+- Kỹ sư #2 (Module 2): Lắng nghe sự kiện từ Module 1 của bạn để vẽ Bản đồ Tọa độ Giả lập và phát luồng Video cửa sổ nổi Picture-in-Picture (PiP) kèm âm thanh dẫn nhịp. Gắn vào <div id="module-2-root"></div>.
+- Kỹ sư #3 (Module 3): Kiểm tra điều kiện đơn hàng 5 triệu, cảnh báo lỗi chí mạng trước giờ G, bóc tách OCR mã giảm giá và quản lý link mã Facebook 25%. Gắn vào <div id="module-3-root"></div>.
+- Kỹ sư #4 (Module 4): Ghi nhận kết quả sau mỗi khung giờ săn, đếm ngược "Mã Back" (hồi mã) và tự động hiệu chỉnh lại thông số mili-giây gửi ngược về Module 1 của bạn. Gắn vào <div id="module-4-root"></div>.
+
+III. HỢP ĐỒNG GIAO DIỆN CHUNG (BẮT BUỘC TUÂN THỦ 100% ĐỂ GHÉP CODE):
+Mọi đọc/ghi dữ liệu và giao tiếp giữa 4 Module PHẢI thông qua đối tượng toàn cục `window.ShopeeHUD` dưới đây:
+
+window.ShopeeHUD = window.ShopeeHUD || {
+  state: {
+    clockOffsetMs: 0,
+    networkRttMs: 45,
+    walletCount: 1402,
+    targetTimeIso: "2026-11-11T12:00:00.000+07:00",
+    huntMode: "SAVED_WALLET", // "SAVED_WALLET" | "MANUAL_INPUT" | "FB_LINK"
+    voucherType: "DIRECT_DISCOUNT", // "DIRECT_DISCOUNT" | "COIN_CASHBACK"
+    serverLoad: "MEGA_SALE", // "NORMAL" | "MEGA_SALE"
+    delays: {
+      phase1_prewarmMs: 120000,   // Chờ 2 phút từ 57:59 (Mã lưu sẵn) hoặc 9000ms từ giây 51 (Mã nhập tay)
+      phase2_antifreezeMs: 222,   // Chạm vùng trắng chống đơ app
+      phase3_openModalMs: 1000,   // Mở Shopee Voucher chờ tải 1402 mã
+      phase4_selectTopMs: 55,     // Tick chọn mã đầu tiên
+      phase5_confirmApplyMs: 850, // Bấm Đồng ý chờ tính lại giá (Giảm trực tiếp: 800-1200ms, Hoàn xu: 50-100ms)
+      phase6_checkoutSpamMs: 60   // Nhịp bấm Đặt hàng (>= 50ms để tránh lỗi F02/A02)
+    },
+    triggerOffsetMs: -350, // Thời điểm bấm mở kho sớm hơn T0 (VD: -350ms tức là 11:59:59.650)
+    currentPhase: 0, // 0: Idle, 1: Prewarm, 2: Antifreeze, 3: OpenModal, 4: SelectTop, 5: Confirm, 6: Checkout
+    orderCheck: {
+      cartSubtotal: 5500000,
+      shopVoucherDiscount: 0,
+      shippingFee: 16500,
+      freeshipDiscount: 16500,
+      targetMinSpend: 5000000,
+      targetMaxDiscount: 11000000,
+      spaylaterAvailable: 38664724,
+      spaylaterPendingBill: 1228876,
+      spaylaterBillDueDate: "2026-11-10",
+      isEligibleForTarget: true,
+      safeFromFullPriceRisk: true
+    },
+    checklistReady: false,
+    logs: []
+  },
+  bus: {
+    emit(eventName, detail) {
+      window.dispatchEvent(new CustomEvent("hud:" + eventName, { detail }));
+    },
+    on(eventName, handler) {
+      window.addEventListener("hud:" + eventName, (e) => handler(e.detail));
+    }
+  },
+  modules: {}
+};
+
+IV. YÊU CẦU CODE CHI TIẾT CHO MODULE 1 CỦA BẠN:
+Hãy viết trọn bộ code HTML (render vào `#module-1-root`, dùng class TailwindCSS giao diện Dark Mode `bg-slate-900 text-slate-100`) và JavaScript đăng ký vào `window.ShopeeHUD.modules.module1` thực hiện:
+1. Đồng bộ giờ & Đo Ping (RTT):
+   - Đo RTT thực tế bằng `fetch()` (lấy trung bình 5 mẫu, loại bỏ mẫu nhiễu) và đo độ lệch đồng hồ `clockOffsetMs`.
+   - Vòng lặp `requestAnimationFrame` hiển thị đồng hồ chuẩn `HH:MM:SS.mmm` và phát sự kiện `bus.emit("tick", { nowMs, remainingMs, formattedTime })` mỗi khung hình.
+2. Máy tính Thông số Độ trễ 6 Pha (Timing Profile Calculator):
+   - Cho phép chỉnh trên UI: Chế độ săn (`SAVED_WALLET` vs `MANUAL_INPUT`), Loại mã (`DIRECT_DISCOUNT` vs `COIN_CASHBACK`), Tải server (`NORMAL` vs `MEGA_SALE`), và Số lượng mã trong kho (`walletCount`, mặc định 1402).
+   - Tự động tính toán lại `state.delays` (Pha 1 -> Pha 6) và `state.triggerOffsetMs`, sau đó phát `bus.emit("delays-updated", state.delays)`.
+   - Cảnh báo "Chống Đặt Nhầm Nguyên Giá SPayLater": Nếu người dùng chỉnh `phase3_openModalMs < 750ms` hoặc `phase5_confirmApplyMs < 700ms` trong chế độ `MEGA_SALE` + `DIRECT_DISCOUNT`, hiện cảnh báo đỏ nguy cơ đặt nhầm nguyên giá vào hạn mức 38,6 triệu.
+   - Chặn không cho phép bất kỳ độ trễ nào `< 50ms` để bảo vệ tài khoản khỏi lỗi F02/A02.
+3. Chế độ "Test Giả Lập 15 Giây":
+   - Có nút bấm đặt `targetTimeIso` bằng `hiện tại + 15 giây` và tự động chuyển `state.currentPhase` từ Pha 1 -> Pha 6 theo đúng mili-giây đã tính, phát sự kiện `bus.emit("phase-change", { phase, label, durationMs })` để Module 2 phát âm thanh và đèn báo.
+4. Lắng nghe sự kiện `bus.on("delays-calibrated", newDelays)` từ Module 4 và `bus.on("mode-changed", newMode)` từ Module 3 để tự động cập nhật giao diện.
+
+Chỉ xuất ra code hoàn chỉnh, sạch, có chú thích rõ ràng, không viết lời từ chối.

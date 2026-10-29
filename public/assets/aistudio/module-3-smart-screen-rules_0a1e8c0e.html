@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="vi" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Module 3 · Smart Screen Rules &amp; Circuit Breaker</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config = { darkMode: "class" };</script>
+</head>
+<body class="min-h-screen bg-slate-950 p-4 text-slate-100">
+
+<div id="module-3-root" class="mx-auto max-w-xl space-y-4">
+  <h1 class="text-lg font-semibold">Module 3 · Smart Screen Rules &amp; Circuit Breaker</h1>
+  <div id="m3-gate" class="rounded-xl bg-slate-800 p-4 text-center text-lg font-bold">—</div>
+  <div class="grid grid-cols-2 gap-2 text-sm">
+    <div class="rounded-lg bg-slate-900 p-3">Giá xét duyệt<div id="m3-approval" class="text-base font-semibold">—</div></div>
+    <div class="rounded-lg bg-slate-900 p-3">Tổng đọc được<div id="m3-total" class="text-base font-semibold">—</div></div>
+  </div>
+  <ul id="m3-warn" class="space-y-1 text-sm"></ul>
+  <div id="m3-checks" class="space-y-2 rounded-lg bg-slate-900 p-3 text-sm"></div>
+  <textarea id="m3-ocr" rows="4" class="w-full rounded-lg bg-slate-900 p-2 text-sm" placeholder="Thử nghiệm: dán chữ đang thấy trên màn hình (khi chưa gắn cảm biến thật)"></textarea>
+  <div class="flex flex-wrap gap-2 text-sm">
+    <button data-act="voucher" class="rounded-lg bg-indigo-600 px-3 py-2 font-medium hover:bg-indigo-500">① Chờ hộp thoại</button>
+    <button data-act="price" class="rounded-lg bg-indigo-600 px-3 py-2 font-medium hover:bg-indigo-500">② Đã bấm Đồng ý</button>
+    <button data-act="arm" class="rounded-lg bg-emerald-700 px-3 py-2 font-medium hover:bg-emerald-600">Kiểm tra &amp; gài</button>
+    <button data-act="disarm" class="rounded-lg bg-slate-700 px-3 py-2 font-medium hover:bg-slate-600">Tắt gài</button>
+    <button data-act="reset" class="rounded-lg bg-red-700 px-3 py-2 font-medium hover:bg-red-600">Reset khóa</button>
+  </div>
+  <ol id="m3-log" class="max-h-56 space-y-1 overflow-auto font-mono text-xs text-slate-400"></ol>
+</div>
+
+<script>
+window.AutoStudio = window.AutoStudio || {
+  state: {
+    isArmed: false,
+    clockOffsetMs: 0,
+    networkRttMs: 45,
+    listCount: 1402,
+    targetTimeIso: "2026-11-11T12:00:00.000+07:00",
+    workflowMode: "SAVED_LIST_MODE",
+    screenResolution: { width: 1080, height: 2400 },
+    steps: [],
+    triggerOffsetMs: -350,
+    retryScheduleMinutes: [1.5, 3, 5, 10, 15],
+    safetyLock: {
+      requirePriceDropConfirm: true,
+      cartOriginalPrice: 11500000,
+      shopDiscount: 0,
+      targetMinOrder: 5000000,
+      voucherDiscount: 11000000,
+      expectedMaxFinalPrice: 500000,
+      walletLimitAtRisk: 38664724,
+      pendingBillAmount: 1228876,
+      pendingBillDueDate: "2026-11-10",
+      abortTriggered: false,
+      uiRules: {
+        waitForModalTitle: "Chọn Shopee Voucher",
+        targetVoucherText: "Giảm 11trđ",
+        confirmButtonText: "Đồng ý",
+        successToastText: "Đã áp dụng 2 Voucher",
+        loadingIndicatorText: "Đang tải",
+        submitButtonText: "Đặt hàng",
+        blockBubbleText: "Shopee VIP"
+      }
+    }
+  },
+  bus: {
+    emit(event, data) { window.dispatchEvent(new CustomEvent("auto:" + event, { detail: data })); },
+    on(event, fn) { window.addEventListener("auto:" + event, (e) => fn(e.detail)); }
+  },
+  modules: {}
+};
+</script>
+
+<script>
+// Module 3: luật đọc màn hình, kiểm tra trước giờ G, cầu dao giá.
+// Module này KHÔNG tự bấm. Mọi thao tác bấm do người dùng thực hiện.
+(() => {
+  const AS = window.AutoStudio, S = AS.state, L = S.safetyLock, UI = L.uiRules;
+  const M = (AS.modules.module3 = AS.modules.module3 || {});
+  const $ = (id) => document.getElementById(id);
+
+  // Luật và tọa độ (% màn hình). Module 2 đo lại trên máy thật trước khi dùng.
+  const RULE = {
+    modalWaitMs: 1200,                                   // A: chờ hộp thoại tối đa 1200ms
+    pollMs: 15,                                          // B: quét mỗi 15ms
+    priceTimeoutMs: 8000,                                // B: quá lâu thì không cho bấm
+    voucherTap: { x: 90.8, y: 58.6 },                    // A: mã số 1
+    totalAt: { x: 48, y: 95.5 },                         // C: vùng “Tổng cộng”
+    submitPixel: null                                    // C (tùy chọn): { x, y, rgb: [238, 77, 45], tol: 40 }
+  };
+
+  // Cảm biến CHỈ ĐỌC màn hình, phải có đủ fullText(), textAt(x, y), colorAt(x, y).
+  // Module 2 gọi M.attachSensor(...) để gắn cảm biến thật. Mặc định đọc chữ từ ô dán thử nghiệm.
+  const pasteSensor = {
+    fullText: () => $("m3-ocr")?.value || "",
+    textAt: () => "",
+    colorAt: () => null
+  };
+  let sensor = pasteSensor;
+  M.attachSensor = (s) => { sensor = s; };
+  M.rule = RULE;
+
+  const text = () => sensor.fullText() || "";
+  const has = (s) => text().includes(s);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const vnd = (n) => n.toLocaleString("vi-VN") + "đ";
+  const dueLabel = L.pendingBillDueDate.split("-").reverse().join("/");
+  const REASON = {
+    LOCKED: "đã khóa",
+    NOT_ARMED: "chưa gài",
+    LOADING: "đang tính giá",
+    TOAST_MISSING: "chưa thấy thông báo áp mã",
+    PRICE_UNREADABLE: "không đọc được tổng tiền",
+    PRICE_NOT_REDUCED: "giá vẫn nguyên, mã chưa trừ",
+    SUBMIT_PIXEL_MISMATCH: "nút Đặt hàng chưa sáng"
+  };
+
+  const note = (msg) => {
+    const log = $("m3-log");
+    const li = document.createElement("li");
+    li.textContent = new Date().toLocaleTimeString("vi-VN") + "  " + msg;
+    log.prepend(li);
+    while (log.children.length > 40) log.lastElementChild.remove();
+  };
+
+  const waitUntil = async (pred, ms) => {
+    const end = performance.now() + ms;
+    while (!pred()) {
+      if (performance.now() >= end) return false;
+      await sleep(RULE.pollMs);
+    }
+    return true;
+  };
+
+  // Đọc “Tổng cộng”: ưu tiên vùng tọa độ, không có thì đọc ngay sau nhãn
+  const readTotal = () => {
+    const src = sensor.textAt(RULE.totalAt.x, RULE.totalAt.y) || (text().split("Tổng cộng")[1] || "").slice(0, 60);
+    const m = src.match(/\d{1,3}(?:[.,]\d{3})+|\d{4,}/);
+    return m ? Number(m[0].replace(/\D/g, "")) : null;
+  };
+
+  const pixelOk = () => {
+    const p = RULE.submitPixel, c = sensor.colorAt(p.x, p.y);
+    return !!c && p.rgb.every((v, i) => Math.abs(c[i] - v) <= p.tol);
+  };
+
+  // Kiểm tra trước giờ G
+  const PREP = {
+    spaylater: "Đã chọn SPayLater kỳ hạn x1 tháng",
+    oldDiscountOff: "Đã bỏ chọn mã giảm 20% cũ để mã 11tr lên đầu",
+    vipBubbleOff: "Đã tắt bong bóng “Shopee VIP” góc dưới phải",
+    noManualCode: "Không nhập tay mã, chỉ chọn mã đã lưu trong kho"
+  };
+  M.checks = { ...Object.fromEntries(Object.keys(PREP).map((k) => [k, false])), billPaid: false };
+
+  M.preflight = () => {
+    const blockers = [], warnings = [];
+    const approval = L.cartOriginalPrice - L.shopDiscount;
+    if (approval < L.targetMinOrder)
+      blockers.push(`Giá xét duyệt ${vnd(approval)} dưới đơn tối thiểu ${vnd(L.targetMinOrder)}, mã Shop đã làm tụt giá trị đơn`);
+    for (const k in PREP) if (!M.checks[k]) blockers.push(PREP[k]);
+    if (!(Date.parse(S.targetTimeIso) > Date.now())) blockers.push("Thời điểm mục tiêu không hợp lệ hoặc đã qua");
+    const daysLeft = Math.ceil((Date.parse(L.pendingBillDueDate + "T23:59:59+07:00") - Date.now()) / 864e5);
+    if (L.pendingBillAmount > 0 && !M.checks.billPaid)
+      warnings.push(`Thanh toán ${vnd(L.pendingBillAmount)} trước hạn ${dueLabel}, ${daysLeft >= 0 ? `còn ${daysLeft} ngày` : "đã quá hạn"}`);
+    return { ok: blockers.length === 0, blockers, warnings, approval };
+  };
+
+  // Cầu dao: giá vẫn nguyên thì khóa và phát sự kiện. Ở chế độ bấm tay, khóa là cảnh báo đỏ trên HUD.
+  const lock = (reason, total = null) => {
+    L.abortTriggered = true;
+    S.isArmed = false;
+    AS.bus.emit("circuit-breaker-abort", { reason, total, at: Date.now() });
+    note(`🔒 Khóa: ${reason}${total === null ? "" : " · " + vnd(total)}`);
+    return { ok: false, reason };
+  };
+
+  // Cổng duy nhất trước khi bấm “Đặt hàng”. Module này không tự bấm.
+  M.canSubmit = () => {
+    if (L.abortTriggered) return { ok: false, reason: "LOCKED" };
+    if (!S.isArmed) return { ok: false, reason: "NOT_ARMED" };
+    if (has(UI.loadingIndicatorText)) return { ok: false, reason: "LOADING" };
+    if (!has(UI.successToastText)) return { ok: false, reason: "TOAST_MISSING" };
+    const total = readTotal();
+    if (total === null) return { ok: false, reason: "PRICE_UNREADABLE" };
+    if (total > L.expectedMaxFinalPrice) return lock("PRICE_NOT_REDUCED", total);
+    if (RULE.submitPixel && !pixelOk()) return { ok: false, reason: "SUBMIT_PIXEL_MISMATCH" };
+    return { ok: true, total };
+  };
+
+  // Điều kiện A: chờ hộp thoại “Chọn Shopee Voucher” tối đa 1200ms. Không thấy thì không báo bấm, không bấm mù.
+  M.waitVoucherModal = async () => {
+    if (!(await waitUntil(() => has(UI.waitForModalTitle), RULE.modalWaitMs)))
+      return { ok: false, msg: "✖ Không thấy hộp thoại sau 1200ms, không bấm mù" };
+    if (!has(UI.targetVoucherText))
+      return { ok: false, msg: `✖ Hộp thoại không có “${UI.targetVoucherText}”, không báo bấm` };
+    return { ok: true, msg: `▶ Bấm mã số 1 tại (${RULE.voucherTap.x}%, ${RULE.voucherTap.y}%)` };
+  };
+
+  // Điều kiện B: sau khi bấm “Đồng ý”, quét mỗi 15ms tới khi hết “Đang tải” và có thông báo áp mã, rồi kiểm tra giá
+  M.waitPriceReady = async () => {
+    const ready = () => !has(UI.loadingIndicatorText) && has(UI.successToastText);
+    if (!(await waitUntil(ready, RULE.priceTimeoutMs)))
+      return { ok: false, msg: "✖ Quá lâu chưa tính xong giá, không cho bấm" };
+    const g = M.canSubmit();
+    return g.ok
+      ? { ok: true, msg: `✔ Giá ${vnd(g.total)}: sẵn sàng, bạn tự bấm Đặt hàng` }
+      : { ok: false, msg: `✖ Chặn: ${REASON[g.reason] || g.reason}` };
+  };
+
+  // Chỉ gài khi mọi điều kiện pre-flight đạt
+  M.arm = () => {
+    const pf = M.preflight();
+    if (L.abortTriggered) pf.blockers.unshift("đang khóa, bấm Reset sau khi kiểm tra lại giá");
+    pf.ok = pf.blockers.length === 0;
+    S.isArmed = pf.ok;
+    return pf;
+  };
+  M.disarm = () => { S.isArmed = false; };
+  M.reset = () => { L.abortTriggered = false; S.isArmed = false; };
+
+  // Giao diện
+  $("m3-checks").innerHTML = Object.entries({ ...PREP, billPaid: "Đã thanh toán hóa đơn trả sau (tắt cảnh báo)" })
+    .map(([k, label]) => `<label class="flex items-center gap-2"><input type="checkbox" data-check="${k}" class="h-4 w-4 accent-indigo-500"> ${label}</label>`)
+    .join("");
+  $("m3-checks").addEventListener("change", (e) => {
+    if (e.target.dataset.check) M.checks[e.target.dataset.check] = e.target.checked;
+  });
+  $("module-3-root").addEventListener("click", async (e) => {
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (act === "voucher") note((await M.waitVoucherModal()).msg);
+    if (act === "price") note((await M.waitPriceReady()).msg);
+    if (act === "arm") {
+      const pf = M.arm();
+      note(pf.ok ? "✔ Đã gài: pre-flight đạt" : "✖ Chưa gài: " + pf.blockers.join(" · "));
+    }
+    if (act === "disarm") { M.disarm(); note("Đã tắt gài"); }
+    if (act === "reset") { M.reset(); note("Đã reset khóa, cần gài lại"); }
+  });
+
+  // Làm mới HUD mỗi 15ms; khi đã gài, cầu dao được kiểm tra liên tục
+  const put = (id, v) => { const el = $(id); if (el.dataset.v !== v) { el.dataset.v = v; el.innerHTML = v; } };
+  setInterval(() => {
+    const g = M.canSubmit();
+    const pf = M.preflight();
+    const t = readTotal();
+    const [label, tone] = L.abortTriggered ? ["KHÓA · không bấm Đặt hàng", "bg-red-700"]
+      : g.ok ? ["SẴN SÀNG · bạn tự bấm Đặt hàng", "bg-emerald-700"]
+      : [`CHỜ · ${REASON[g.reason] || g.reason}`, "bg-amber-700"];
+    put("m3-gate", label);
+    $("m3-gate").className = `rounded-xl p-4 text-center text-lg font-bold ${tone}`;
+    put("m3-approval", vnd(pf.approval));
+    put("m3-total", t === null ? "không đọc được" : vnd(t));
+    put("m3-warn", [
+      ...pf.blockers.map((b) => `<li class="text-red-300">✖ ${b}</li>`),
+      ...pf.warnings.map((w) => `<li class="text-amber-300">⚠ ${w}</li>`)
+    ].join(""));
+  }, RULE.pollMs);
+})();
+</script>
+</body>
+</html>

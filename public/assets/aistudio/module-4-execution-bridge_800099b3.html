@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="vi" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Module 4: Execution Bridge</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config = { darkMode: 'class' };</script>
+</head>
+<body class="dark bg-zinc-950 text-zinc-100 p-3">
+<div id="module-4-root" class="max-w-xl mx-auto"></div>
+<script>
+(function () {
+  'use strict';
+  if (!window.AutoStudio) throw new Error('Thiếu window.AutoStudio: nạp hợp đồng chung trước');
+  var AS = window.AutoStudio, S = AS.state;
+  if (AS.modules.module4) return;
+
+  var WS_URL = 'ws://127.0.0.1:8765';
+  var PRICE_LABEL = 'Tổng thanh toán';
+  var SUCCESS_TEXTS = ['Đặt hàng thành công', 'Đơn hàng đã được đặt'];
+  var BTN = 'px-3 py-1.5 rounded-md bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500';
+  var ws = null, seq = 0, manual = false, retryT = null, backoff = 1000;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var pad = function (n, w) { return String(n).padStart(w || 2, '0'); };
+  var stamp = function () {
+    var d = new Date();
+    return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + '.' + pad(d.getMilliseconds(), 3);
+  };
+
+  /* ---------- UI ---------- */
+  var root = $('module-4-root') || document.body.appendChild(Object.assign(document.createElement('div'), { id: 'module-4-root' }));
+  root.innerHTML = `
+  <section class="rounded-xl border border-zinc-800 bg-zinc-900 p-4 space-y-3">
+    <header class="flex items-center justify-between">
+      <h2 class="font-semibold text-zinc-100">Module 4: Execution Bridge</h2>
+      <span id="m4-ws" class="px-2 py-0.5 rounded text-xs"></span>
+    </header>
+    <div class="flex flex-wrap gap-2">
+      <button id="m4-conn" class="${BTN}"></button>
+      <button id="m4-arm" class="${BTN}"></button>
+      <button id="m4-copy" class="${BTN}">Copy Script Tự Chạy</button>
+      <button id="m4-dl" class="${BTN}">Tải File .JS Về Điện Thoại</button>
+    </div>
+    <p class="text-xs text-zinc-400">Đếm ngược tới mốc chạm: <span id="m4-cd" class="font-mono text-emerald-400">--</span></p>
+    <pre id="m4-log" class="h-56 overflow-auto rounded bg-black p-2 font-mono text-xs text-zinc-300 whitespace-pre-wrap"></pre>
+  </section>`;
+
+  var logEl = $('m4-log');
+  var log = function (tag, msg) {
+    logEl.textContent += '[' + stamp() + '] ' + (tag + '     ').slice(0, 5) + ' ' + msg + '\n';
+    if (logEl.textContent.length > 30000) logEl.textContent = logEl.textContent.slice(-20000);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+  var setWs = function (on) {
+    var b = $('m4-ws');
+    b.textContent = on ? 'Online' : 'Offline';
+    b.className = 'px-2 py-0.5 rounded text-xs ' + (on ? 'bg-emerald-700 text-white' : 'bg-zinc-700 text-zinc-300');
+    $('m4-conn').textContent = on ? 'Ngắt kết nối' : 'Kết nối';
+  };
+  var setArm = function () { $('m4-arm').textContent = 'ARM: ' + (S.isArmed ? 'ON' : 'OFF'); };
+
+  /* ---------- WebSocket bridge ---------- */
+  var schedule = function () {
+    if (manual) return;
+    clearTimeout(retryT);
+    retryT = setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 15000);
+  };
+  var connect = function () {
+    if (ws && ws.readyState <= 1) return;
+    manual = false; clearTimeout(retryT);
+    try { ws = new WebSocket(WS_URL); }
+    catch (e) { log('ERR', String(e)); return schedule(); }
+    ws.onopen = function () { backoff = 1000; setWs(true); log('OPEN', WS_URL); };
+    ws.onmessage = function (e) { log('ACK', String(e.data).slice(0, 160)); };
+    ws.onerror = function () { log('ERR', 'socket lỗi, kiểm tra dịch vụ trên máy'); };
+    ws.onclose = function () { setWs(false); log('CLOSE', manual ? 'đã ngắt thủ công' : 'mất kết nối'); schedule(); };
+  };
+  var disconnect = function () { manual = true; clearTimeout(retryT); if (ws) ws.close(); };
+  var send = function (cmd) {
+    if (!ws || ws.readyState !== 1) { log('DROP', cmd.op + '(' + cmd.x + ', ' + cmd.y + '): WS chưa mở'); return false; }
+    ws.send(JSON.stringify(cmd));
+    return true;
+  };
+  var toCmd = function (p) {
+    var R = S.screenResolution;
+    var x = Number.isFinite(p.x) ? p.x : Math.round((p.xPct || 0) / 100 * R.width);
+    var y = Number.isFinite(p.y) ? p.y : Math.round((p.yPct || 0) / 100 * R.height);
+    var d = Number(p.duration || p.durationMs || 0);
+    return { op: d > 0 ? 'press' : 'click', x: x, y: y, duration: d };
+  };
+  AS.bus.on('dispatch-touch', function (packet) {
+    packet = packet || {};
+    if (!Number.isFinite(packet.x) && !Number.isFinite(packet.xPct)) { log('BAD', 'packet thiếu tọa độ'); return; }
+    var c = toCmd(packet);
+    if (!S.isArmed) { log('SKIP', c.op + '(' + c.x + ', ' + c.y + '): chưa ARM'); return; }
+    c.id = ++seq; c.t = Date.now();
+    if (send(c)) log('SEND', '#' + c.id + ' ' + c.op + '(' + c.x + ', ' + c.y + (c.duration ? ', ' + c.duration + 'ms' : '') + ')');
+  });
+
+  /* ---------- Countdown (giờ máy chủ = Date.now() + clockOffsetMs) ---------- */
+  var fireMs = function () { return Date.parse(S.targetTimeIso) + S.triggerOffsetMs; };
+  var fmtCd = function (ms) {
+    var a = Math.abs(ms);
+    return (ms < 0 ? '+' : '-') + pad(Math.floor(a / 3600000)) + ':' + pad(Math.floor(a / 60000) % 60) + ':' +
+      pad(Math.floor(a / 1000) % 60) + '.' + pad(a % 1000, 3);
+  };
+  setInterval(function () { $('m4-cd').textContent = fmtCd(fireMs() - (Date.now() + S.clockOffsetMs)); }, 50);
+
+  /* ---------- AutoX.js generator ---------- */
+  var generateAndroidAutoScript = function () {
+    var R = S.screenResolution, W = R.width, H = R.height, L = S.safetyLock;
+    return AUTOX_TEMPLATE({
+      screen: { width: W, height: H },
+      clockOffsetMs: S.clockOffsetMs,
+      fireMs: fireMs(),
+      steps: S.steps.map(function (s) {
+        return { name: s.name, action: s.action, x: Math.round(s.xPct / 100 * W), y: Math.round(s.yPct / 100 * H), delay: s.delayAfterMs, burst: s.burstCount || 0 };
+      }),
+      retryMs: S.retryScheduleMinutes.map(function (m) { return Math.round(m * 60000); }),
+      maxPriceVnd: L.expectedMaxFinalPrice,
+      requirePriceDropConfirm: L.requirePriceDropConfirm,
+      priceLabel: PRICE_LABEL,
+      success: SUCCESS_TEXTS,
+      ui: L.uiRules
+    });
+  };
+
+  function AUTOX_TEMPLATE(cfg) {
+    return String.raw`auto.waitFor();
+// Sinh bởi Module 4 lúc ${new Date().toISOString()}
+// Giờ máy chủ ≈ Date.now() + clockOffsetMs. Dừng khẩn cấp: nút đỏ trên bảng nổi.
+var CFG = ${JSON.stringify(cfg, null, 1)};
+setScreenMetrics(CFG.screen.width, CFG.screen.height);
+
+var FIRE = CFG.fireMs, OFF = CFG.clockOffsetMs, ST = CFG.steps, UI = CFG.ui;
+var ABORT = false, STARTED = false, fw = null;
+
+function now() { return new Date().getTime() + OFF; }
+function pad(n, w) { var t = String(n); while (t.length < (w || 2)) t = '0' + t; return t; }
+function fmt(ms) {
+  var a = Math.abs(ms);
+  return (ms < 0 ? '+' : '-') + pad(Math.floor(a / 3600000)) + ':' + pad(Math.floor(a / 60000) % 60) + ':' +
+    pad(Math.floor(a / 1000) % 60) + '.' + pad(a % 1000, 3);
+}
+function log(m) {
+  console.log(m);
+  if (fw) ui.run(function () { fw.st.setText(String(m)); });
+}
+function jit(v) { return v + Math.round(Math.random() * 6 - 3); }
+function tapAt(s) { press(jit(s.x), jit(s.y), 50 + Math.round(Math.random() * 40)); }
+function sleepUntil(t) { while (!ABORT && now() < t) sleep(Math.max(1, Math.min(50, t - now()))); }
+function waitUntilTrue(fn, ms) {
+  var e = Date.now() + ms;
+  while (!ABORT && Date.now() < e) { if (fn()) return true; sleep(100); }
+  return false;
+}
+function has(s) { return textContains(s).exists(); }
+function waitFor(s, ms) { return waitUntilTrue(function () { return has(s); }, ms); }
+function waitGone(s, ms) { return waitUntilTrue(function () { return !has(s); }, ms); }
+function success() {
+  for (var k = 0; k < CFG.success.length; k++) if (has(CFG.success[k])) return true;
+  return false;
+}
+function tapText(s, fallback) {
+  var w = textContains(s).findOne(300);
+  if (w && w.click()) return 'node';
+  tapAt(fallback);
+  return 'coord';
+}
+function textViews() {
+  var list = className('android.widget.TextView').find(), out = [], i, t;
+  for (i = 0; i < list.size(); i++) { t = list.get(i).text(); if (t) out.push(String(t)); }
+  return out;
+}
+function parseVnd(t) {
+  var s = String(t);
+  var m = s.match(/[₫đ]\s?(\d{1,3}(?:[.,]\d{3})+|\d+)/) || s.match(/(\d{1,3}(?:[.,]\d{3})+|\d+)\s?(?:₫|đ|VND)/i);
+  return m ? parseInt(m[1].replace(/[.,]/g, ''), 10) : null;
+}
+function readPayable() {
+  var a = textViews(), n = a.length, i, j, v;
+  for (i = 0; i < n; i++) {
+    if (a[i].indexOf(CFG.priceLabel) < 0) continue;
+    for (j = i; j < Math.min(n, i + 4); j++) { v = parseVnd(a[j]); if (v !== null) return v; }
+  }
+  return null;
+}
+// Cầu dao: không đọc được giá, hoặc giá vượt mức tối đa thì KHÔNG bấm Đặt hàng
+function breaker() {
+  var p = readPayable(), max = CFG.maxPriceVnd;
+  if (p === null) { log('Cầu dao: không đọc được giá, không đặt'); return false; }
+  if (CFG.requirePriceDropConfirm && p > max) { log('Cầu dao: giá ' + p + ' > ' + max + ', chưa đặt'); return false; }
+  log('Cầu dao: giá ' + p + ', cho phép đặt');
+  return true;
+}
+// Một lượt: mở voucher, chọn, Đồng ý, kiểm giá, burst Đặt hàng có chốt an toàn
+function attempt(anchor) {
+  sleepUntil(anchor);
+  if (ABORT) return 'ABORT';
+  tapAt(ST[2]); sleep(ST[2].delay);
+  if (!waitFor(UI.waitForModalTitle, 2500) || !waitFor(UI.targetVoucherText, 1500)) {
+    log('Chưa thấy modal hoặc voucher mục tiêu, bỏ lượt'); return 'NOT_READY';
+  }
+  tapAt(ST[3]); sleep(ST[3].delay);
+  tapText(UI.confirmButtonText, ST[4]); sleep(ST[4].delay);
+  waitGone(UI.loadingIndicatorText, 4000);
+  log('Toast voucher: ' + (has(UI.successToastText) ? 'có' : 'không thấy'));
+  if (!waitFor(UI.submitButtonText, 2000)) { log('Chưa thấy nút Đặt hàng, bỏ lượt'); return 'NOT_READY'; }
+  if (!breaker()) return 'HOLD';
+  // Burst chỉ tiếp tục khi nút còn đó và không có "Đang tải", tránh đơn trùng
+  for (var i = 0; i < ST[5].burst && !ABORT; i++) {
+    if (!has(UI.submitButtonText) || has(UI.loadingIndicatorText)) break;
+    tapAt(ST[5]); sleep(Math.max(60, ST[5].delay));
+  }
+  if (waitUntilTrue(success, 6000)) { log('Thành công, dừng mọi lượt thử'); return 'OK'; }
+  if (!has(UI.submitButtonText)) { log('Đã rời checkout nhưng chưa thấy xác nhận, dừng. Kiểm tra Đơn hàng'); return 'LEFT'; }
+  log('Chưa xác nhận, vẫn ở checkout, sẽ thử lại');
+  return 'RETRY';
+}
+function runAll() {
+  var t1 = FIRE - ST[1].delay - ST[0].delay, t2 = FIRE - ST[1].delay;
+  log('Chờ pre-warm: ' + fmt(t1 - now()));
+  sleepUntil(t1);
+  if (!ABORT && now() - t1 < 3000) tapAt(ST[0]);
+  sleepUntil(t2);
+  if (!ABORT && now() - t2 < 1000) tapAt(ST[1]);
+  var res = attempt(FIRE);
+  for (var k = 0; k < CFG.retryMs.length && !ABORT; k++) {
+    if (res === 'OK' || res === 'LEFT') break;
+    log('Thử lại lần ' + (k + 1) + ' lúc +' + Math.round(CFG.retryMs[k] / 1000) + 's');
+    res = attempt(FIRE + CFG.retryMs[k]);
+  }
+  log('Kết thúc: ' + res);
+}
+
+if (!floaty.checkPermission()) {
+  floaty.requestPermission();
+  toast('Cấp quyền hiển thị trên ứng dụng khác rồi chạy lại');
+  exit();
+}
+fw = floaty.window(
+  <vertical bg="#E6111111" padding="8">
+    <text id="clk" text="--" textColor="#00FF88" textSize="13sp"/>
+    <text id="st" text="Sẵn sàng" textColor="#FFFFFF" textSize="11sp"/>
+    <button id="go" text="BẮT ĐẦU TỰ ĐỘNG" textSize="11sp"/>
+    <button id="stop" text="DỪNG KHẨN CẤP" textColor="#FF5555" textSize="11sp"/>
+  </vertical>
+);
+fw.setPosition(10, 300);
+fw.go.click(function () {
+  if (STARTED) return;
+  STARTED = true;
+  threads.start(function () { try { runAll(); } catch (e) { log('Lỗi: ' + e); } });
+});
+fw.stop.click(function () { ABORT = true; log('Dừng khẩn cấp, hủy mọi lượt'); });
+threads.start(function () {
+  while (true) {
+    (function (v) { ui.run(function () { fw.clk.setText(fmt(v)); }); })(FIRE - now());
+    sleep(100);
+  }
+});
+`;
+  }
+
+  /* ---------- Controls ---------- */
+  $('m4-conn').onclick = function () { (ws && ws.readyState <= 1) ? disconnect() : connect(); };
+  $('m4-arm').onclick = function () {
+    S.isArmed = !S.isArmed; setArm();
+    log('ARM', S.isArmed ? 'bật, sẽ bắn lệnh' : 'tắt, không bắn lệnh');
+  };
+  $('m4-copy').onclick = function () {
+    var code = generateAndroidAutoScript();
+    if (!navigator.clipboard) return log('ERR', 'trình duyệt không hỗ trợ copy, dùng nút tải file');
+    navigator.clipboard.writeText(code).then(
+      function () { log('COPY', 'đã copy ' + code.length + ' ký tự'); },
+      function () { log('ERR', 'copy bị chặn, dùng nút tải file'); });
+  };
+  $('m4-dl').onclick = function () {
+    var code = generateAndroidAutoScript(), name = 'macro-studio-' + Date.now() + '.js';
+    var url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+    var a = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+    log('FILE', name);
+  };
+
+  setWs(false); setArm();
+  log('INIT', 'Module 4 sẵn sàng, bấm Kết nối để mở ' + WS_URL);
+  AS.modules.module4 = { connect: connect, disconnect: disconnect, send: send, generateAndroidAutoScript: generateAndroidAutoScript };
+})();
+</script>
+</body>
+</html>

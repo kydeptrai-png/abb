@@ -1,0 +1,76 @@
+Bạn là Kỹ sư Phần mềm số 2 trong một nhóm gồm 4 kỹ sư AI đang cùng xây dựng ứng dụng Web App "Shopee 11.11 Tactical HUD" (chạy trên trình duyệt điện thoại, triển khai qua Google AI Studio).
+
+I. BỐI CẢNH DỰ ÁN & LÝ DO PHẢI LÀM MODULE NÀY:
+- Chúng ta đang làm công cụ Trợ lý Hiển thị & Dẫn nhịp (Phương án A + B - Lớp phủ chỉ đọc). Người dùng tự thao tác trên màn hình điện thoại theo tín hiệu đồng hồ nổi và âm thanh dẫn nhịp, tuyệt đối KHÔNG can thiệp vào hệ thống của Shopee.
+- Khi người dùng mở ứng dụng mua sắm trên điện thoại, trình duyệt web sẽ bị đẩy xuống nền. Do đó, Module 2 của bạn có nhiệm vụ sống còn: Xuất đồng hồ mili-giây và tín hiệu đèn báo 6 Pha từ HTML5 `<canvas>` sang thẻ `<video>` để bật chế độ Cửa sổ nổi **Picture-in-Picture (PiP)** nằm đè hợp pháp trên góc màn hình điện thoại, kết hợp âm thanh Web Audio API báo hiệu từng nhịp bấm.
+- Ngoài ra, Module 2 cung cấp một "Bản đồ Tọa độ Trực quan (Visual Coordinate Trainer)" để người dùng tải ảnh chụp màn hình Thanh toán lên, xem vị trí chính xác của 6 điểm thao tác và tập bấm theo nhịp mili-giây.
+
+II. PHÂN CÔNG TRONG NHÓM 4 KỸ SƯ:
+- Kỹ sư #1 (Module 1): Đã viết bộ đồng hồ mili-giây, tính toán `state.delays` (6 pha) và liên tục phát sự kiện `hud:tick`, `hud:phase-change`, `hud:delays-updated`.
+- Bạn (Kỹ sư #2 - Module 2): Viết "Visual Coordinate Trainer & PiP Floating HUD". Gắn vào thẻ <div id="module-2-root"></div>.
+- Kỹ sư #3 (Module 3): Kiểm tra điều kiện đơn hàng 5 triệu, cảnh báo lỗi trước giờ G và quản lý link mã Facebook. Gắn vào <div id="module-3-root"></div>.
+- Kỹ sư #4 (Module 4): Ghi nhận nhật ký săn sale và tự hiệu chỉnh độ trễ. Gắn vào <div id="module-4-root"></div>.
+
+III. HỢP ĐỒNG GIAO DIỆN CHUNG (BẮT BUỘC TUÂN THỦ 100% ĐỂ GHÉP CODE):
+Sử dụng đối tượng toàn cục `window.ShopeeHUD` dưới đây:
+
+window.ShopeeHUD = window.ShopeeHUD || {
+  state: {
+    clockOffsetMs: 0,
+    networkRttMs: 45,
+    walletCount: 1402,
+    targetTimeIso: "2026-11-11T12:00:00.000+07:00",
+    huntMode: "SAVED_WALLET", // "SAVED_WALLET" | "MANUAL_INPUT" | "FB_LINK"
+    voucherType: "DIRECT_DISCOUNT",
+    serverLoad: "MEGA_SALE",
+    delays: {
+      phase1_prewarmMs: 120000,
+      phase2_antifreezeMs: 222,
+      phase3_openModalMs: 1000,
+      phase4_selectTopMs: 55,
+      phase5_confirmApplyMs: 850,
+      phase6_checkoutSpamMs: 60
+    },
+    triggerOffsetMs: -350,
+    currentPhase: 0,
+    orderCheck: {},
+    checklistReady: false,
+    logs: []
+  },
+  bus: {
+    emit(eventName, detail) {
+      window.dispatchEvent(new CustomEvent("hud:" + eventName, { detail }));
+    },
+    on(eventName, handler) {
+      window.addEventListener("hud:" + eventName, (e) => handler(e.detail));
+    }
+  },
+  modules: {}
+};
+
+IV. DỮ LIỆU TỌA ĐỘ CHUẨN ĐÃ ĐO TỪ MÀN HÌNH ĐIỆN THOẠI CỦA NGƯỜI DÙNG:
+1. Chế độ `SAVED_WALLET` (Săn mã đã lưu sẵn trong Kho Voucher - dùng cho mã SPayLater 11tr):
+   - Điểm 1 (Vùng trắng chờ 2p từ 57:59): `X = 20%, Y = 25%` | Delay: `phase1_prewarmMs`
+   - Điểm 2 (Vùng trắng chống đơ app): `X = 25%, Y = 25%` | Delay: `phase2_antifreezeMs` (222ms)
+   - Điểm 3 (Mục "Shopee Voucher" trang Thanh toán): `X = 75.0%, Y = 53.0%` | Delay: `phase3_openModalMs` (1000ms)
+   - Điểm 4 (Ô tròn chọn mã đầu tiên trên cùng): `X = 90.8%, Y = 58.6%` | Delay: `phase4_selectTopMs` (55ms)
+   - Điểm 5 (Nút cam "Đồng ý"): `X = 50.0%, Y = 95.5%` | Delay: `phase5_confirmApplyMs` (850ms)
+   - Điểm 6 (Nút cam "Đặt hàng" - tránh đặt nhầm khi chưa hiện Toast "Đã áp dụng 2 Voucher" ở `X=50%, Y=89.2%`): `X = 81.2%, Y = 96.0%` | Delay: `phase6_checkoutSpamMs` (60ms)
+2. Chế độ `MANUAL_INPUT` (Săn mã nhập tay ký tự):
+   - Điểm 1 (Vùng trắng chờ 9s từ giây 51): `X = 20%, Y = 25%` | Delay: 9000ms
+   - Điểm 2 & 3 (Nút "Áp dụng" cạnh ô nhập mã): `X = 85.8%, Y = 16.2%` | Delay: 60ms
+   - Điểm 4 (Nút cam "Đồng ý"): `X = 50.0%, Y = 95.5%` | Delay: `phase5_confirmApplyMs`
+   - Điểm 5 (Nút cam "Đặt hàng"): `X = 81.2%, Y = 96.0%` | Delay: `phase6_checkoutSpamMs`
+
+V. YÊU CẦU CODE CHI TIẾT CHO MODULE 2 CỦA BẠN:
+Hãy viết trọn bộ code HTML (render vào `#module-2-root`, dùng TailwindCSS Dark Mode) và JavaScript đăng ký vào `window.ShopeeHUD.modules.module2` thực hiện:
+1. Cửa sổ nổi Picture-in-Picture (PiP HUD) & Âm thanh Web Audio API:
+   - Tạo `<canvas width="420" height="220">` vẽ đồng hồ mili-giây chữ lớn, thông số `triggerOffsetMs`, thanh tiến trình và màu nền đổi theo `currentPhase` (Pha 3: Vàng cam "MỞ KHO VOUCHER", Pha 4 & 5: Xanh lá "TICK MÃ & ĐỒNG Ý", Pha 6: Đỏ rực "KIỂM TRA GIÁ & ĐẶT HÀNG!").
+   - Kết nối `canvas.captureStream(30)` vào thẻ `<video muted playsinline>` và tạo nút "Bật Cửa Sổ Nổi PiP Đè Lên Màn Hình".
+   - Dùng Web Audio API (`AudioContext` + `OscillatorNode`) phát tiếng Beep tần số khác nhau ở mỗi lần nhận sự kiện `bus.on("phase-change")`.
+2. Bản đồ Tọa độ Tương tác & Luyện Phản Xạ (Visual Coordinate Trainer):
+   - Cho phép người dùng tải ảnh chụp màn hình điện thoại lên (hoặc dùng khung màn hình mẫu tỷ lệ 9:20).
+   - Vẽ các vòng tròn mục tiêu đánh số (1 -> 6) tại đúng tọa độ `(X%, Y%)` kèm nhãn độ trễ `(ms)` lấy từ `state.delays`.
+   - Có chế độ "Luyện Bấm Tay Thực Tế": Khi chạy đếm ngược, người dùng chạm ngón tay vào đúng vòng tròn sáng lên trên màn hình, hệ thống đo sai số phản xạ của ngón tay (ms) và phát `bus.emit("trainer-score", { avgReactionMs })`.
+
+Chỉ xuất ra code hoàn chỉnh, sạch, hoạt động độc lập và khớp 100% với `window.ShopeeHUD`.
