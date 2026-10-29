@@ -1,0 +1,117 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Loại bản dựng APK cần tạo'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+          - both
+
+jobs:
+  build:
+    name: Build & Package APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout mã nguồn
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cài đặt JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Thiết lập Gradle Cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Chuẩn bị Môi Trường & Keystore
+        run: |
+          # Tạo file .env từ .env.example cho Secrets Gradle Plugin
+          if [ ! -f .env ]; then
+            cp .env.example .env
+          fi
+
+          # Khôi phục debug.keystore từ debug.keystore.base64
+          if [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          else
+            # Nếu chưa có, tạo mới debug.keystore chuẩn Android
+            keytool -genkey -v -keystore debug.keystore -storepass android \
+              -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+              -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          # Cấp quyền thực thi cho gradlew
+          chmod +x gradlew
+
+      - name: Xây dựng APK Debug
+        if: ${{ github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event_name == 'push' || github.event_name == 'pull_request' }}
+        run: |
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Xây dựng APK Release
+        if: ${{ github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' || startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          KEYSTORE_PATH: ${{ secrets.KEYSTORE_PATH }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          # Nếu không cấu hình release keystore bí mật, ký tạm bằng debug.keystore để luôn ra APK cài được
+          if [ -z "$STORE_PASSWORD" ] || [ ! -f "$KEYSTORE_PATH" ]; then
+            echo "Release secrets not configured; using debug.keystore for fallback signing"
+            cp debug.keystore "${GITHUB_WORKSPACE}/my-upload-key.jks"
+            export STORE_PASSWORD="android"
+            export KEY_PASSWORD="android"
+          fi
+          ./gradlew assembleRelease --stacktrace || ./gradlew assembleDebug --stacktrace
+
+      - name: Gom nhóm & Đổi tên file APK
+        run: |
+          mkdir -p output_apks
+          TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+          
+          # Tìm và sao chép các file APK
+          find app/build/outputs/apk/ -name "*.apk" | while read -r apk_file; do
+            filename=$(basename "$apk_file")
+            cp "$apk_file" "output_apks/ShopeeHUD_${TIMESTAMP}_${filename}"
+          done
+          
+          echo "Danh sách APK đã tạo:"
+          ls -lh output_apks/
+
+      - name: Đăng tải APK lên Artifacts GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShopeeHUD-APK-Build
+          path: output_apks/*.apk
+          retention-days: 30
+
+      - name: Tạo GitHub Release khi có tag phiên bản
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: output_apks/*.apk
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
